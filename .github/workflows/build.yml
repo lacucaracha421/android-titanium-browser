@@ -7,73 +7,57 @@ on:
         description: 'Runner'
         required: true
         type: string
-        default: 'self-hosted' # ubuntu-latest
-  schedule:
-    - cron: '0 0 */16 * *'
+        default: 'ubuntu-latest'
 
 permissions:
   contents: write
-  id-token: write
-  attestations: write
 
 jobs:
   build:
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: true
-      
-      - name: Update 
-        run: |
-          cd vanadium
-          git fetch --tags
-          git checkout $(git tag | sort -V | tail -n1)
-          cd ..
-          git add vanadium
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          if ! git diff --staged --quiet; then
-            git commit -am "update"
-            git push
-          fi
 
-      - name: Set ENV
-        run: | 
-          chmod +x *.sh
-          echo "unix_time=$(date +%s)" >> $GITHUB_ENV
-    
-      - name: Build
-        env:
-            DEBIAN_FRONTEND: noninteractive
-            LOCAL_TEST_JKS: ${{ secrets.LOCAL_TEST_JKS }}
-            STORE_TEST_JKS: ${{ secrets.STORE_TEST_JKS }}
+      - name: Free runner disk space
         run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Create ephemeral test signing key
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore test.jks \
+            -storepass titaniumtest \
+            -keypass titaniumtest \
+            -alias titanium-test \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=Titanium Proton Test,O=Laku,C=KR"
+          printf 'keyAlias=titanium-test\nkeyPassword=titaniumtest\nstorePassword=titaniumtest\n' > local.properties
+          echo "LOCAL_TEST_JKS=$(base64 -w0 local.properties)" >> "$GITHUB_ENV"
+          echo "STORE_TEST_JKS=$(base64 -w0 test.jks)" >> "$GITHUB_ENV"
+
+      - name: Build ARM64 test APK
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TITANIUM_ARM64_ONLY: '1'
+        run: |
+          chmod +x *.sh
           ./build.sh
 
-      - name: Set
+      - name: Set version
         run: |
-          export VERSION=$(find chromium/src/out/release -name '*arm64-v8a.apk' | sed 's/.*\///;s/\-arm64-v8a.apk$//')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          mv $(find chromium/src/out/release -name '*arm64-v8a.aab') $VERSION-${{ env.unix_time }}-arm64-v8a.aab
-          mv $(find chromium/src/out/release -name '*arm64-v8a.apk') $VERSION-${{ env.unix_time }}-arm64-v8a.apk
-          mv $(find chromium/src/out/release -name '*armeabi-v7a.apk') $VERSION-${{ env.unix_time }}-armeabi-v7a.apk
+          echo "VERSION=$(grep -m1 -o '[0-9]\+\(\.[0-9]\+\)\{3\}' vanadium/args.gn)" >> "$GITHUB_ENV"
 
-      - name: Publish
+      - name: Publish test APK
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: v${{ env.VERSION }}
-          tag_name: v${{ env.VERSION }}
-          files: |
-            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.aab
-            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.apk
-            ${{ env.VERSION }}-${{ env.unix_time }}-armeabi-v7a.apk
-
-      - name: Attest
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: |
-            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.aab
-            ${{ env.VERSION }}-${{ env.unix_time }}-arm64-v8a.apk
-            ${{ env.VERSION }}-${{ env.unix_time }}-armeabi-v7a.apk
+          tag_name: proton-auth-test-${{ github.run_number }}
+          name: Titanium Proton auth test ${{ env.VERSION }}
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            Test build with Chromium's upstream desktop-Android webRequest.onAuthRequired fix backported.
+            Test-signed; package id: io.github.lacucaracha421.titaniumproton
+          files: chromium/src/out/release/*-arm64-v8a.apk

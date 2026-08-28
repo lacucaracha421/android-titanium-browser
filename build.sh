@@ -35,8 +35,21 @@ gclient runhooks
 
 source $SCRIPT_DIR/patch.sh
 cp $SCRIPT_DIR/args.gn out/Default/args.gn
+if [ "${TITANIUM_ARM64_ONLY:-0}" = "1" ]; then
+    sed -i 's/target_cpu = "arm"/target_cpu = "arm64"/' out/Default/args.gn
+fi
 gn gen out/Default # gn args out/Default; echo 'treat_warnings_as_errors = false' >> out/Default/args.gn
 mkdir -p out/tmp out/release
+
+if [ "${TITANIUM_ARM64_ONLY:-0}" = "1" ]; then
+    autoninja -C out/Default chrome_public_apk
+    mv $(find out/Default/apks -name 'Chrome*.apk') out/tmp/$VERSION-arm64-v8a.apk
+    export PATH=$PWD/third_party/jdk/current/bin/:$PATH
+    export ANDROID_HOME=$PWD/third_party/android_sdk/public
+    sign_apk out/tmp/$VERSION-arm64-v8a.apk out/release/$VERSION-arm64-v8a.apk
+    rm -rf $SCRIPT_DIR/keys
+    exit 0
+fi
 
 autoninja -C out/Default chrome_public_apk
 mv $(find out/Default/apks -name 'Chrome*.apk') out/tmp/$VERSION-armeabi-v7a.apk
