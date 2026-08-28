@@ -12,6 +12,11 @@ sudo dpkg --add-architecture i386
 sudo apt-get update
 sudo apt-get install -y libgcc-s1:i386
 
+# Chromium and gclient hooks apply patches in multiple independent Git repos
+# (src, v8, search_engines_data, etc.), so the identity must be global in CI.
+git config --global user.name "Titanium CI"
+git config --global user.email "titanium-ci@users.noreply.github.com"
+
 git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
 export PATH="$PWD/depot_tools:$PATH"
 mkdir -p chromium/src/out/Default
@@ -20,10 +25,6 @@ git init
 git remote add origin "$CHROMIUM_SOURCE"
 git fetch --depth 1 "$CHROMIUM_SOURCE" +refs/tags/$VERSION:chromium_$VERSION
 git checkout "$VERSION"
-
-# git am creates commits, so CI needs an explicit identity.
-git config user.name "Titanium CI"
-git config user.email "titanium-ci@users.noreply.github.com"
 
 cp "$SCRIPT_DIR/.gclient" ../.gclient
 
