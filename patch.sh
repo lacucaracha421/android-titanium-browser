@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Backport Chromium crrev 2b0bc015: enable webRequest.onAuthRequired on desktop Android.
+# Skip automatically once the Chromium base carries the upstream fix.
+if grep -q '#if BUILDFLAG(ENABLE_EXTENSIONS)' chrome/browser/ui/login/http_auth_coordinator.cc; then
+    git apply "$SCRIPT_DIR/patches/enable-on-auth-required-desktop-android.patch"
+fi
+
+
 mkdir -p chrome/android/java/res_titanium_base
 cp $SCRIPT_DIR/res/drawable/themed_app_icon.xml chrome/android/java/res_titanium_base/drawable/themed_app_icon.xml
 for icon in $(find chrome/android/java/res_titanium_base -type f -name '*.png'); do convert $icon -fill navy -tint 36 $icon && $SCRIPT_DIR/res/icon.sh $icon; done

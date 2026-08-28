@@ -1,0 +1,57 @@
+diff --git a/chrome/browser/ui/login/BUILD.gn b/chrome/browser/ui/login/BUILD.gn
+index e94fa69..9c20a74 100644
+--- a/chrome/browser/ui/login/BUILD.gn
++++ b/chrome/browser/ui/login/BUILD.gn
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//extensions/buildflags/buildflags.gni")
++
+ assert(is_win || is_mac || is_linux || is_chromeos || is_android)
+ 
+ source_set("login") {
+@@ -45,14 +47,16 @@ source_set("impl") {
+     "//ui/base",
+     "//ui/gfx",
+   ]
+-  if (!is_android) {
++  if (enable_extensions_core) {
+     deps += [
+       "//components/guest_view/browser",
+-      "//components/web_modal",
+       "//extensions/browser",
+       "//extensions/common:mojom",
+     ]
+   }
++  if (!is_android) {
++    deps += [ "//components/web_modal" ]
++  }
+ 
+   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+ }
+diff --git a/chrome/browser/ui/login/http_auth_coordinator.cc b/chrome/browser/ui/login/http_auth_coordinator.cc
+index efa5da6..1d172fb 100644
+--- a/chrome/browser/ui/login/http_auth_coordinator.cc
++++ b/chrome/browser/ui/login/http_auth_coordinator.cc
+@@ -13,9 +13,9 @@
+ #include "content/public/common/content_features.h"
+ #include "extensions/buildflags/buildflags.h"
+ 
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ #include "content/public/browser/guest_page_holder.h"
+-#include "extensions/browser/api/web_request/web_request_api.h"  // nogncheck
++#include "extensions/browser/api/web_request/web_request_api.h"
+ #include "extensions/browser/guest_view/web_view/web_view_guest.h"
+ #endif
+ 
+@@ -109,7 +109,7 @@ void HttpAuthCoordinator::Flow::WrapperDestroyed() {
+ bool HttpAuthCoordinator::Flow::ForwardToExtension(
+     content::GuestPageHolder* guest,
+     content::BrowserContext* browser_context) {
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   // If the WebRequest API wants to take a shot at intercepting this, we can
+   // return immediately. |continuation| will eventually be invoked if the
+   // request isn't cancelled.
