@@ -14,6 +14,16 @@ solutions = [
 ]
 hooks = [
   {
+    'name': 'apply_subprojects_patches',
+    'condition': 'checkout_android',
+    'action': ['python3',
+              '../vanadium/tools/common/apply_subprojects_patches.py',
+              '--base_patch_dir',
+              '../vanadium/subprojects_patches',
+              '--src_dir',
+              'src']
+  },
+  {
     'name': 'fetch_filter_lists',
     'condition': 'checkout_android',
     'action': ['python3',
@@ -24,16 +34,6 @@ hooks = [
               'https://easylist-downloads.adblockplus.org/antiadblockfilters.txt',
               'https://easylist.to/easylist/easylist.txt',
               'https://easylist.to/easylist/easyprivacy.txt']
-  },
-  {
-    'name': 'apply_subprojects_patches',
-    'condition': 'checkout_android',
-    'action': ['python3',
-              '../vanadium/tools/common/apply_subprojects_patches.py',
-              '--base_patch_dir',
-              '../vanadium/subprojects_patches',
-              '--src_dir',
-              'src']
   },
   {
     'name': 'fetch_titanium_extension',
