@@ -3,11 +3,56 @@ set -euo pipefail
 
 source common.sh
 set_keys
+
+set_gn_arg() {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+
+    if grep -Eq "^[[:space:]]*${key}[[:space:]]*=" "$file"; then
+        sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$file"
+    else
+        printf '%s = %s\n' "$key" "$value" >> "$file"
+    fi
+}
+
+run_autoninja_compact() {
+    local status=0
+
+    # Chromium/Siso can emit enormous logs. Keep GitHub Actions readable while
+    # retaining a rolling tail that is printed at the end (or on failure).
+    NINJA_SUMMARIZE_BUILD=1 autoninja -C out/Default "$@" 2>&1 | awk '
+        {
+            ring[NR % 300] = $0
+            if (NR % 2000 == 0) {
+                printf("[build progress] %d lines processed: %s\n", NR, $0)
+                fflush()
+            }
+        }
+        END {
+            count = (NR < 300 ? NR : 300)
+            start = NR - count + 1
+            print "----- final build output (up to 300 lines) -----"
+            for (i = start; i <= NR; i++) {
+                print ring[i % 300]
+            }
+            fflush()
+        }
+    ' || status=$?
+
+    if command -v ccache >/dev/null 2>&1; then
+        ccache --show-stats || true
+    fi
+
+    return "$status"
+}
+
 export VERSION=$(grep -m1 -o '[0-9]\+\(\.[0-9]\+\)\{3\}' vanadium/args.gn)
 export CHROMIUM_SOURCE=https://chromium.googlesource.com/chromium/src.git # https://github.com/chromium/chromium.git
 export DEBIAN_FRONTEND=noninteractive
+
 sudo apt-get update
-sudo apt-get install -y sudo lsb-release file nano git curl python3 python3-pillow imagemagick librsvg2-bin
+sudo apt-get install -y sudo lsb-release file nano git curl python3 python3-pillow imagemagick librsvg2-bin ccache
 sudo dpkg --add-architecture i386
 sudo apt-get update
 sudo apt-get install -y libgcc-s1:i386
@@ -21,12 +66,18 @@ git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools
 export PATH="$PWD/depot_tools:$PATH"
 mkdir -p chromium/src/out/Default
 cd chromium/src
+
 git init
 git remote add origin "$CHROMIUM_SOURCE"
 git fetch --depth 1 "$CHROMIUM_SOURCE" +refs/tags/$VERSION:chromium_$VERSION
 git checkout "$VERSION"
 
 cp "$SCRIPT_DIR/.gclient" ../.gclient
+
+# Fast CI test builds do not use PGO, so do not download PGO profiles either.
+if [ "${TITANIUM_FAST_TEST:-0}" = "1" ]; then
+    sed -i "s/'checkout_pgo_profiles': True/'checkout_pgo_profiles': False/" ../.gclient
+fi
 
 # https://grapheneos.org/build#browser-and-webview
 rm -rf $SCRIPT_DIR/vanadium/patches/*trichrome-{apk-build-targets,browser-apk-targets}.patch
@@ -51,17 +102,49 @@ test -d titanium
 
 source "$SCRIPT_DIR/patch.sh"
 cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
+
 if [ "${TITANIUM_ARM64_ONLY:-0}" = "1" ]; then
-    sed -i 's/target_cpu = "arm"/target_cpu = "arm64"/' out/Default/args.gn
+    set_gn_arg target_cpu '"arm64"' out/Default/args.gn
 fi
+
+if [ "${TITANIUM_FAST_TEST:-0}" = "1" ]; then
+    echo "Applying fast Chromium test-build settings"
+
+    # Keep release-like behavior, but remove the expensive production-only
+    # optimization/debugging work that is unnecessary for auth regression tests.
+    set_gn_arg symbol_level 0 out/Default/args.gn
+    set_gn_arg blink_symbol_level 0 out/Default/args.gn
+    set_gn_arg v8_symbol_level 0 out/Default/args.gn
+    set_gn_arg generate_linker_map false out/Default/args.gn
+    set_gn_arg chrome_pgo_phase 0 out/Default/args.gn
+    set_gn_arg is_cfi false out/Default/args.gn
+    set_gn_arg use_cfi_cast false out/Default/args.gn
+    set_gn_arg use_thin_lto false out/Default/args.gn
+    set_gn_arg android_static_analysis '"off"' out/Default/args.gn
+
+    # Reuse compiler output between GitHub-hosted runs through actions/cache.
+    if command -v ccache >/dev/null 2>&1; then
+        export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/ccache}"
+        export CCACHE_BASEDIR="$PWD"
+        export CCACHE_COMPRESS=1
+        mkdir -p "$CCACHE_DIR"
+        ccache --max-size="${CCACHE_MAXSIZE:-4G}"
+        set_gn_arg cc_wrapper '"ccache"' out/Default/args.gn
+    fi
+fi
+
+echo "Effective fast-build GN args:"
+grep -E '^(target_cpu|symbol_level|blink_symbol_level|v8_symbol_level|generate_linker_map|chrome_pgo_phase|is_cfi|use_cfi_cast|use_thin_lto|android_static_analysis|cc_wrapper)[[:space:]]*=' out/Default/args.gn || true
+
 gn gen out/Default
 mkdir -p out/tmp out/release
 
 if [ "${TITANIUM_ARM64_ONLY:-0}" = "1" ]; then
-    autoninja -C out/Default chrome_public_apk
+    run_autoninja_compact chrome_public_apk
     apk_path=$(find out/Default/apks -name 'Chrome*.apk' -print -quit)
     test -n "$apk_path"
     mv "$apk_path" "out/tmp/$VERSION-arm64-v8a.apk"
+
     export PATH="$PWD/third_party/jdk/current/bin/:$PATH"
     export ANDROID_HOME="$PWD/third_party/android_sdk/public"
     sign_apk "out/tmp/$VERSION-arm64-v8a.apk" "out/release/$VERSION-arm64-v8a.apk"
@@ -69,12 +152,15 @@ if [ "${TITANIUM_ARM64_ONLY:-0}" = "1" ]; then
     exit 0
 fi
 
-autoninja -C out/Default chrome_public_apk
+run_autoninja_compact chrome_public_apk
 apk_path=$(find out/Default/apks -name 'Chrome*.apk' -print -quit)
 test -n "$apk_path"
 mv "$apk_path" "out/tmp/$VERSION-armeabi-v7a.apk"
-sed -i 's/target_cpu = "arm"/target_cpu = "arm64"/' out/Default/args.gn
-autoninja -C out/Default chrome_public_apk chrome_public_bundle
+
+set_gn_arg target_cpu '"arm64"' out/Default/args.gn
+gn gen out/Default
+run_autoninja_compact chrome_public_apk chrome_public_bundle
+
 apk_path=$(find out/Default/apks -name 'Chrome*.apk' -print -quit)
 aab_path=$(find out/Default/apks -name 'Chrome*.aab' -print -quit)
 test -n "$apk_path"
