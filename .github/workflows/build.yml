@@ -1,6 +1,9 @@
 name: Build
 
 on:
+  push:
+    branches:
+      - proton-auth-fix
   workflow_dispatch:
     inputs:
       runner:
