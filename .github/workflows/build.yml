@@ -15,9 +15,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: titanium-proton-auth-build
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -27,6 +31,15 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
           df -h /
+
+      - name: Restore Chromium compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: titanium-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            titanium-ccache-${{ runner.os }}-${{ github.ref_name }}-
+            titanium-ccache-${{ runner.os }}-
 
       - name: Create ephemeral test signing key
         run: |
@@ -41,10 +54,12 @@ jobs:
           echo "LOCAL_TEST_JKS=$(base64 -w0 local.properties)" >> "$GITHUB_ENV"
           echo "STORE_TEST_JKS=$(base64 -w0 test.jks)" >> "$GITHUB_ENV"
 
-      - name: Build ARM64 test APK
+      - name: Build ARM64 fast test APK
         env:
           DEBIAN_FRONTEND: noninteractive
           TITANIUM_ARM64_ONLY: '1'
+          TITANIUM_FAST_TEST: '1'
+          CCACHE_MAXSIZE: '4G'
         run: |
           chmod +x *.sh
           ./build.sh
@@ -61,6 +76,6 @@ jobs:
           prerelease: true
           generate_release_notes: false
           body: |
-            Test build with Chromium's upstream desktop-Android webRequest.onAuthRequired fix backported.
+            Fast ARM64 regression build with Chromium PGO/ThinLTO/CFI and debug symbols disabled.
             Test-signed; package id: io.github.lacucaracha421.titaniumproton
           files: chromium/src/out/release/*-arm64-v8a.apk
